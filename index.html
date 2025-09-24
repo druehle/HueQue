@@ -1,0 +1,405 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+  <title>HueQue</title>
+  <style>
+    :root {
+      --bg: #0e0f12;
+      --panel: #151922;
+      --accent: #6dd5ed;
+      --text: #e6e6e6;
+      --muted: #9aa3b2;
+      --vial-width: 64px;
+      --vial-gap: 16px;
+      --cell-height: 28px;
+      --radius: 14px;
+      --scale: 1;
+      --max-board-width: 1024px;
+      --cells: 4;
+    }
+
+    html, body { height: 100%; margin: 0; background: #0e0f12; color: var(--text); font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial; }
+
+    .app { display: grid; grid-template-rows: auto 1fr auto; height: 100dvh; max-width: 100vw; }
+
+    header, footer { background: #11141b99; backdrop-filter: blur(6px); border-bottom: 1px solid #1f2430; border-top: 1px solid #1f2430; }
+    header { padding: 10px 12px; display: grid; grid-template-columns: 1fr auto 1fr; gap: 8px; align-items: center; }
+    .title { font-weight: 700; letter-spacing: 0.3px; opacity: 0.95; }
+    .controls { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; }
+    .right-controls { display: flex; gap: 8px; justify-content: end; }
+    button, select, input[type="range"] { background: var(--panel); color: var(--text); border: 1px solid #252b38; border-radius: 10px; padding: 8px 10px; font-size: 14px; box-shadow: 0 2px 10px #00000030 inset, 0 1px 0 #ffffff10; }
+    button:active { transform: translateY(1px); }
+
+    main { overflow: hidden; display: grid; place-items: center; padding: 10px 8px; }
+    .board-wrap { transform-origin: top center; transform: scale(var(--scale)); }
+
+    .board { max-width: var(--max-board-width); display: grid; gap: var(--vial-gap); justify-content: center; grid-auto-rows: 1fr; grid-template-columns: repeat(auto-fit, minmax(var(--vial-width), max-content)); padding: 12px; }
+
+    .vial { width: var(--vial-width); background: linear-gradient(#1b2231, #141a26); border: 2px solid #2b3346; border-bottom-width: 10px; border-radius: var(--radius) var(--radius) 12px 12px; box-shadow: 0 8px 18px #00000060, inset 0 2px 0 #ffffff12; padding: 6px 6px 10px 6px; display: flex; flex-direction: column-reverse; /* show the top piece at the visual top */ gap: 6px; cursor: pointer; position: relative; touch-action: manipulation; min-height: calc(var(--cell-height) * var(--cells) + (var(--cells) - 1) * 6px); }
+    .vial:focus-visible { outline: 2px solid var(--accent); }
+    .vial.selected::after { content: ""; position: absolute; inset: -4px; border-radius: 16px; border: 2px solid var(--accent); box-shadow: 0 0 16px #6dd5ed55; pointer-events: none; }
+
+    .cell { height: var(--cell-height); border-radius: 8px; box-shadow: inset 0 -2px 0 #00000033, inset 0 2px 0 #ffffff22; display: grid; place-items: center; font-weight: 700; font-size: 12px; color: #00000055; text-shadow: 0 1px 0 #ffffff66; user-select: none; }
+
+    .hud { display: flex; gap: 10px; align-items: center; }
+    .meter { font-variant-numeric: tabular-nums; color: var(--muted); font-size: 13px; }
+
+    footer { padding: 10px 12px; display: flex; gap: 10px; align-items: center; justify-content: space-between; }
+    .colors-prev { display: inline-flex; gap: 6px; align-items: center; }
+    .swatch { width: 14px; height: 14px; border-radius: 3px; border: 1px solid #0006; box-shadow: inset 0 1px 0 #fff3; }
+
+    @media (max-width: 480px) { :root { --vial-width: 56px; --cell-height: 24px; --vial-gap: 12px; } header, footer { padding: 8px; } button { padding: 8px; } .title { font-size: 14px; } }
+
+    /* Win modal */
+    .win-overlay { position: fixed; inset: 0; display: none; align-items: center; justify-content: center; background: #0008; z-index: 50; }
+    .win-overlay.show { display: flex; }
+    .win-card { background: #141a22; border: 1px solid #2b3346; border-radius: 16px; padding: 20px 24px; box-shadow: 0 12px 40px #000a; text-align: center; }
+    .win-card h2 { margin: 0 0 8px 0; }
+    .win-card p { margin: 0 0 16px 0; color: var(--muted); }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header>
+      <div class="title">HueQue</div>
+      <div class="controls">
+        <label class="hud">
+          Vials:
+          <select id="vialCount"></select>
+        </label>
+        <button id="newGame">New</button>
+        <button id="undoBtn" title="Undo last move (Z)">Undo</button>
+      </div>
+      <div class="right-controls">
+        <div class="hud">
+          <span class="meter" id="moveMeter">Moves: 0</span>
+          <span class="meter" id="zoomMeter">Zoom: 100%</span>
+        </div>
+        <input id="zoom" type="range" min="60" max="160" value="100" step="2" />
+        <button id="fitBtn">Fit</button>
+      </div>
+    </header>
+
+    <main>
+      <div class="board-wrap">
+        <div id="board" class="board" role="grid" aria-label="HueQue board"></div>
+      </div>
+    </main>
+
+    <div id="winOverlay" class="win-overlay" aria-hidden="true" role="dialog" aria-label="Win dialog">
+      <div class="win-card">
+        <h2>🎉 You Win!</h2>
+        <p>Nice sorting. Want another round?</p>
+        <div style="display:flex; gap:8px; justify-content:center;">
+          <button id="winNew">New Game</button>
+          <button id="winClose">Close</button>
+        </div>
+      </div>
+    </div>
+
+    <footer>
+      <div class="colors-prev" id="legend"></div>
+      <div class="meter" id="status">Tap a vial to pick up or drop a block. Win by grouping each color into its own vial.</div>
+    </footer>
+  </div>
+
+  <script>
+    // --- Utilities ---
+    const randInt = (min, max) => Math.floor(Math.random() * (max - min + 1)) + min;
+    const choice = (arr) => arr[randInt(0, arr.length - 1)];
+
+    const PALETTE = [
+      '#ff6b6b', '#4ecdc4', '#ffe66d', '#5dade2', '#a66ddc',
+      '#f7a072', '#28df99', '#c4f1be', '#84d2f6', '#f29e4c',
+      '#90be6d', '#f94144', '#577590', '#f8961e', '#43aa8b'
+    ];
+
+    // --- Game State ---
+    const state = {
+      vials: [],
+      history: [],
+      selected: null,
+      moves: 0,
+      maxStack: 4,
+      numVials: 5
+    };
+
+    // --- DOM Refs ---
+    const boardEl = document.getElementById('board');
+    const vialCountSel = document.getElementById('vialCount');
+    const newGameBtn = document.getElementById('newGame');
+    const undoBtn = document.getElementById('undoBtn');
+    const moveMeter = document.getElementById('moveMeter');
+    const legendEl = document.getElementById('legend');
+    const statusEl = document.getElementById('status');
+    const zoomRange = document.getElementById('zoom');
+    const zoomMeter = document.getElementById('zoomMeter');
+    const fitBtn = document.getElementById('fitBtn');
+    const boardWrap = document.querySelector('.board-wrap');
+    const winOverlay = document.getElementById('winOverlay');
+    const winNew = document.getElementById('winNew');
+    const winClose = document.getElementById('winClose');
+
+    // Populate vial count selector (3..12 default, can extend easily)
+    vialCountSel.innerHTML = '';
+    for (let i = 3; i <= 12; i++) {
+      const opt = document.createElement('option');
+      opt.value = String(i);
+      opt.textContent = String(i);
+      vialCountSel.appendChild(opt);
+    }
+
+    // --- Scaling ---
+    function setScale(val) {
+      document.documentElement.style.setProperty('--scale', (val / 100).toString());
+      zoomMeter.textContent = 'Zoom: ' + val + '%';
+    }
+
+    function fitToScreen() {
+      const appRect = document.querySelector('main').getBoundingClientRect();
+      const boardRect = boardWrap.getBoundingClientRect();
+      const scaleX = Math.min(1, (appRect.width - 12) / Math.max(boardRect.width, 1));
+      const scaleY = Math.min(1, (appRect.height - 12) / Math.max(boardRect.height, 1));
+      const scale = Math.max(0.6, Math.min(scaleX, scaleY));
+      const pct = Math.round(scale * 100);
+      zoomRange.value = String(pct);
+      setScale(pct);
+    }
+
+    window.addEventListener('resize', fitToScreen);
+
+    // --- Generator using solver check ---
+    function newGame(numVials = state.numVials) {
+      hideWin();
+      state.numVials = numVials;
+      state.vials = [];
+      state.history = [];
+      state.moves = 0;
+      state.selected = null;
+
+      const numColors = Math.max(1, numVials - 1);
+      if (!dealSolvable(numVials, numColors, 300)) {
+        deterministicDeal(numVials, numColors);
+      }
+
+      render(getCurrentColors());
+      updateHUD();
+      requestAnimationFrame(fitToScreen);
+    }
+
+    function deterministicDeal(numVials, numColors) {
+      state.vials = Array.from({ length: numVials }, () => []);
+      const pool = [];
+      for (let c = 0; c < numColors; c++) {
+        for (let k = 0; k < state.maxStack; k++) pool.push(c);
+      }
+      let i = 0;
+      while (pool.length) {
+        state.vials[i % (numVials - 1)].push(pool.pop());
+        i++;
+      }
+    }
+
+    function dealSolvable(numVials, numColors, attempts) {
+      for (let a = 0; a < attempts; a++) {
+        const vials = Array.from({ length: numVials }, () => []);
+        const pool = [];
+        for (let c = 0; c < numColors; c++) {
+          for (let k = 0; k < state.maxStack; k++) pool.push(c);
+        }
+        for (let i = pool.length - 1; i > 0; i--) {
+          const j = Math.floor(Math.random() * (i + 1));
+          const tmp = pool[i];
+          pool[i] = pool[j];
+          pool[j] = tmp;
+        }
+        for (let i = 0; i < numVials - 1; i++) {
+          for (let h = 0; h < state.maxStack; h++) vials[i].push(pool.pop());
+        }
+        if (isSolvedConfig(vials)) continue;
+        if (isSolvable(vials)) {
+          state.vials = vials;
+          return true;
+        }
+      }
+      return false;
+    }
+
+    function isUniformAndFull(stack) { return stack.length === state.maxStack && stack.every(x => x === stack[0]); }
+    function isSolvedConfig(vials) { return vials.every(v => v.length === 0 || isUniformAndFull(v)); }
+    function encode(vials) { return vials.map(v => v.join(',')).join('|'); }
+    function cloneVials(v) { return v.map(col => col.slice()); }
+
+    function genMovesFrom(vials) {
+      const moves = [];
+      for (let i = 0; i < vials.length; i++) {
+        const from = vials[i];
+        if (from.length === 0) continue;
+        for (let j = 0; j < vials.length; j++) {
+          if (i === j) continue;
+          const to = vials[j];
+          if (to.length >= state.maxStack) continue;
+          const moving = from[from.length - 1];
+          const topTo = to[to.length - 1];
+          if (topTo == null || topTo === moving) {
+            let run = 1;
+            for (let k = from.length - 2; k >= 0 && from[k] === moving; k--) run++;
+            const free = state.maxStack - to.length;
+            moves.push([i, j, Math.min(run, free)]);
+          }
+        }
+      }
+      return moves;
+    }
+
+    function applyMove(vials, i, j, count) {
+      const nv = cloneVials(vials);
+      for (let k = 0; k < count; k++) nv[j].push(nv[i].pop());
+      return nv;
+    }
+
+    function isSolvable(startVials) {
+      const startKey = encode(startVials);
+      const seen = new Set([startKey]);
+      const q = [startVials];
+      let nodes = 0; const MAX_NODES = 60000;
+      while (q.length) {
+        const cur = q.shift();
+        if (isSolvedConfig(cur)) return true;
+        const moves = genMovesFrom(cur);
+        for (let m = 0; m < moves.length; m++) {
+          const [i, j, cnt] = moves[m];
+          if (cur[j].length === 0 && cur[i].length === cnt && new Set(cur[i]).size === 1) continue;
+          const nxt = applyMove(cur, i, j, cnt);
+          const key = encode(nxt);
+          if (!seen.has(key)) {
+            seen.add(key);
+            q.push(nxt);
+            nodes++; if (nodes > MAX_NODES) return false;
+          }
+        }
+      }
+      return false;
+    }
+
+    // --- Rules ---
+    function getRunLengthTop(idx) {
+      const stack = state.vials[idx];
+      if (stack.length === 0) return 0;
+      const color = stack[stack.length - 1];
+      let n = 0;
+      for (let i = stack.length - 1; i >= 0; i--) { if (stack[i] === color) n++; else break; }
+      return n;
+    }
+
+    function canMove(fromIdx, toIdx) {
+      if (fromIdx === toIdx) return false;
+      const from = state.vials[fromIdx];
+      const to = state.vials[toIdx];
+      if (from.length === 0) return false;
+      const freeSpace = state.maxStack - to.length; if (freeSpace <= 0) return false;
+      const movingColor = from[from.length - 1];
+      const topTo = to[to.length - 1];
+      if (!topTo) return true;
+      return topTo === movingColor;
+    }
+
+    function move(fromIdx, toIdx) {
+      if (!canMove(fromIdx, toIdx)) return false;
+      state.history.push(JSON.parse(JSON.stringify(state.vials)));
+      const from = state.vials[fromIdx];
+      const to = state.vials[toIdx];
+      const runLen = getRunLengthTop(fromIdx);
+      const freeSpace = state.maxStack - to.length;
+      const pour = Math.min(runLen, freeSpace);
+      for (let i = 0; i < pour; i++) { to.push(from.pop()); }
+      state.moves++;
+      return true;
+    }
+
+    function isWin() { return state.vials.every(v => v.length === 0 || (v.length === state.maxStack && v.every(c => c === v[0]))); }
+
+    // --- Rendering ---
+    function updateHUD() {
+      moveMeter.textContent = 'Moves: ' + state.moves;
+      if (isWin()) { statusEl.textContent = 'Nice! Puzzle solved.'; showWin(); }
+      else { statusEl.textContent = 'Tap a vial to pick up or drop a block.'; }
+    }
+
+    function render(colorsForLegend) {
+      boardEl.innerHTML = '';
+      state.vials.forEach((stack, idx) => {
+        const vial = document.createElement('div');
+        vial.className = 'vial';
+        vial.tabIndex = 0;
+        vial.setAttribute('role', 'button');
+        vial.setAttribute('aria-label', 'Vial ' + (idx + 1));
+        vial.dataset.idx = String(idx);
+
+        stack.forEach(color => {
+          const cell = document.createElement('div');
+          cell.className = 'cell';
+          const paint = (typeof color === 'number') ? PALETTE[color % PALETTE.length] : color;
+          cell.style.background = paint;
+          vial.appendChild(cell);
+        });
+
+        if (state.selected && state.selected.vialIdx === idx) vial.classList.add('selected');
+
+        vial.addEventListener('click', onVialClick);
+        vial.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onVialClick(e); } });
+
+        boardEl.appendChild(vial);
+      });
+
+      legendEl.innerHTML = '';
+      colorsForLegend.forEach(c => { const s = document.createElement('span'); s.className = 'swatch'; s.style.background = c; legendEl.appendChild(s); });
+    }
+
+    // --- Events ---
+    function onVialClick(e) {
+      const idx = Number(e.currentTarget.dataset.idx);
+      if (state.selected == null) {
+        if (state.vials[idx].length === 0) return;
+        state.selected = { vialIdx: idx };
+      } else {
+        const fromIdx = state.selected.vialIdx;
+        move(fromIdx, idx);
+        state.selected = null;
+      }
+      render(getCurrentColors());
+      updateHUD();
+    }
+
+    function getCurrentColors() {
+      const present = new Set(state.vials.flat());
+      const arr = [];
+      for (let i = 0; i < PALETTE.length; i++) { if (present.has(i)) arr.push(PALETTE[i]); }
+      present.forEach(v => { if (typeof v === 'string') arr.push(v); });
+      return arr;
+    }
+
+    // --- Controls & Boot ---
+    newGameBtn.addEventListener('click', () => newGame(parseInt(vialCountSel.value, 10)));
+    undoBtn.addEventListener('click', () => { const prev = state.history.pop(); if (!prev) return; state.vials = prev; state.moves++; render(getCurrentColors()); updateHUD(); });
+    vialCountSel.addEventListener('change', () => newGame(parseInt(vialCountSel.value, 10)));
+    zoomRange.addEventListener('input', (e) => setScale(parseInt(e.target.value, 10)));
+    fitBtn.addEventListener('click', fitToScreen);
+    window.addEventListener('keydown', (e) => { if ((e.key === 'z' || e.key === 'Z') && !e.metaKey && !e.ctrlKey) { undoBtn.click(); } });
+
+    const defaultVials = randInt(3, 8);
+    vialCountSel.value = String(defaultVials);
+    newGame(defaultVials);
+    setScale(parseInt(zoomRange.value, 10));
+    setTimeout(fitToScreen, 50);
+
+    function showWin() { winOverlay.classList.add('show'); winOverlay.setAttribute('aria-hidden', 'false'); }
+    function hideWin() { winOverlay.classList.remove('show'); winOverlay.setAttribute('aria-hidden', 'true'); }
+
+    winNew.addEventListener('click', () => { hideWin(); newGame(parseInt(vialCountSel.value, 10)); });
+    winClose.addEventListener('click', hideWin);
+  </script>
+</body>
+</html>
